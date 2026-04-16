@@ -1,0 +1,491 @@
+=====================================================================
+HIVESTREAM — FULL DECENTRALIZED MEDIA NETWORK ARCHITECTURE
+=====================================================================
+
+CORE IDEA:
+---------------------------------------------------------------------
+A decentralized media network where:
+- users inject content
+- peers distribute it via WebRTC/WebTorrent
+- behavior generates trust + tokens
+- tokens influence playlist order
+- the network optimizes itself in real time
+---------------------------------------------------------------------
+
+
+
+=====================================================================
+LAYER 0 — IDENTITY & CRYPTO (FOUNDATION)
+=====================================================================
+
+GENERATED LOCALLY (PER USER):
+- public/private key pair (WebCrypto)
+- peerId = hash(publicKey)
+
+PURPOSE:
+- sign receipts
+- verify messages
+- prevent spoofing
+- enable trust + token systems
+
+SHARED:
+- publicKey
+- peerId
+
+NEVER SHARED:
+- privateKey
+
+
+
+=====================================================================
+LAYER 1 — CONTENT INGESTION
+=====================================================================
+
+SOURCES:
+- local file upload (.mp4)
+- magnet links
+- peer-discovered media
+- search-triggered ingestion
+
+PROCESS:
+1. file → WebTorrent seed()
+2. generate infoHash
+3. announce to WSS tracker
+4. broadcast metadata via WebRTC
+5. insert into playlist (boosted)
+6. trigger preload in peers
+
+OUTPUT:
+- infoHash (global ID)
+- magnetURI (swarm entry)
+- metadata
+
+SHARED:
+- infoHash
+- magnetURI
+- minimal metadata
+
+
+
+=====================================================================
+LAYER 2 — METADATA & THUMBNAILS
+=====================================================================
+
+GENERATED:
+- title (filename or external)
+- tags (optional/manual/derived)
+- thumbnail:
+    - extracted locally from video
+    - OR external source (optional)
+
+THUMBNAIL STRATEGY:
+- stored as compressed blob/base64
+- hashed (SHA-256) for deduplication
+
+INDEXEDDB STORES:
+- media_metadata
+- thumbnails (deduped by hash)
+
+SHARED:
+- metadata summaries
+- thumbnail hash (optionally thumbnail)
+
+
+
+=====================================================================
+LAYER 3 — INDEXEDDB (LOCAL MEMORY)
+=====================================================================
+
+STORES:
+
+1. identity
+2. media_metadata
+3. watch_history
+4. vote_history
+5. preference_graph
+6. trust_profiles
+7. tokens
+8. peer_summaries
+9. thumbnails
+10. bumper_cache
+
+RULE:
+- raw user data stays LOCAL
+- only summaries are shared
+
+PURPOSE:
+- fast search
+- recommendation engine
+- persistence
+- local intelligence
+
+
+
+=====================================================================
+LAYER 4 — WEBTORRENT SWARM (MEDIA DISTRIBUTION)
+=====================================================================
+
+TECH:
+- WebRTC data channels
+- WSS tracker for discovery
+
+FUNCTION:
+- peers exchange video chunks
+- downloader becomes uploader (reseeding)
+
+CHARACTERISTICS:
+- ephemeral (browser memory)
+- strongest near active viewers
+
+NO CENTRAL STORAGE
+
+
+
+=====================================================================
+LAYER 5 — WEBRTC PEER MESSAGING (CONTROL PLANE)
+=====================================================================
+
+PURPOSE:
+- exchange NON-media data
+
+MESSAGE TYPES:
+- new_media
+- preload_request
+- peer_summary
+- vote
+- receipt
+- trust_update
+
+OPTIONAL:
+- encrypted messaging (WebCrypto)
+
+DATA SIZE:
+- small (1–10KB typical)
+
+CRITICAL:
+- this is the "brain layer" of the network
+
+
+
+=====================================================================
+LAYER 6 — RECEIPTS (PROOF OF WORK)
+=====================================================================
+
+GENERATED WHEN:
+- peer sends/receives data
+- playback occurs
+
+STRUCTURE:
+{
+  fromPeer,
+  toPeer,
+  infoHash,
+  bytesTransferred,
+  timestamp,
+  signature
+}
+
+SIGNED BY:
+- sender private key
+
+VERIFIED BY:
+- receiver using public key
+
+PURPOSE:
+- prove contribution
+- prevent fake seeding
+- feed trust + tokens
+
+STORED:
+- locally (aggregated)
+
+SHARED:
+- summarized or sampled
+
+
+
+=====================================================================
+LAYER 7 — TRUST SYSTEM
+=====================================================================
+
+BUILT FROM:
+- verified receipts
+- consistency over time
+- fraud detection
+
+FACTORS:
+- bytes contributed
+- successful transfers
+- signature validity
+- peer uptime
+
+FEATURES:
+- decay over time
+- anti-Sybil weighting
+- fraud flags
+
+OUTPUT:
+- trustScore per peer
+
+USED FOR:
+- weighting votes
+- validating summaries
+- prioritizing peers
+
+
+
+=====================================================================
+LAYER 8 — TOKEN ECONOMY
+=====================================================================
+
+GENERATED BY:
+- seeding (bandwidth contribution)
+- uptime
+- network usefulness
+
+SPENT ON:
+- playlist voting
+- bumper video insertion
+- priority boosts
+
+PROPERTIES:
+- tied to identity (public key)
+- signed transactions
+- transferable peer-to-peer
+
+OPTIONAL:
+- persistent ledger (local + peer sync)
+- fees (for "bank"/channel owner)
+
+PURPOSE:
+- incentivize network health
+- align user behavior with performance
+
+
+
+=====================================================================
+LAYER 9 — PLAYLIST ENGINE (CORE UX)
+=====================================================================
+
+STRUCTURE (ZONES):
+
+[ LOCKED ZONE ]   → 1–3 (fully seeded, cannot shift)
+[ ACTIVE ZONE ]   → 4–10 (preloading)
+[ BUFFER ZONE ]   → 11–30+ (queued)
+[ AUTO ZONE ]     → fallback only
+
+RULES:
+- top items must meet readiness threshold
+- votes influence order (weighted by tokens + trust)
+- network readiness can override position
+
+PLAYLIST IS:
+- dynamic
+- constantly rebalanced
+
+
+
+=====================================================================
+LAYER 10 — SEEDING MANAGER (SWARM CONTROL)
+=====================================================================
+
+PURPOSE:
+- optimize bandwidth usage
+- ensure smooth playback
+
+LOGIC:
+- assign target readiness per position
+
+EXAMPLE:
+1 → 100%
+2 → 100%
+3 → 100%
+4 → 70%
+5 → 50%
+...
+
+ACTIONS:
+- start/stop torrents
+- prioritize downloads
+- limit active torrents (3–5)
+
+RESULT:
+- minimal buffering
+- efficient swarm usage
+
+
+
+=====================================================================
+LAYER 11 — AUTO PLAYLIST (INTELLIGENCE)
+=====================================================================
+
+ACTIVATES WHEN:
+- user playlist is low
+
+INPUT:
+- last played item
+- preference_graph
+- seed readiness
+
+OUTPUT:
+- fills BUFFER ZONE
+
+RULE:
+- NEVER overrides strong user intent
+
+
+
+=====================================================================
+LAYER 12 — PREFERENCE GRAPH (RECOMMENDATION CORE)
+=====================================================================
+
+STRUCTURE:
+A → B (weight)
+
+MEANING:
+users who watched A also watched B
+
+GENERATED FROM:
+- watch sequences
+- co-occurrence
+
+USED FOR:
+- recommendations
+- auto playlist
+- search ranking
+
+
+
+=====================================================================
+LAYER 13 — SEARCH ENGINE
+=====================================================================
+
+SOURCES:
+- local metadata
+- peer summaries
+- preference graph
+
+PROCESS:
+1. text match
+2. rank by:
+   - popularity
+   - trust-weighted votes
+   - graph relevance
+   - exploration factor
+
+RESULT:
+- triggers ingestion on click
+
+SEARCH = DISCOVERY + INGESTION
+
+
+
+=====================================================================
+LAYER 14 — PEER SUMMARIES (KNOWLEDGE SHARING)
+=====================================================================
+
+STRUCTURE:
+{
+  peerId,
+  topMedia,
+  topEdges,
+  tags
+}
+
+PURPOSE:
+- share intelligence without raw data
+- bootstrap new peers
+
+SIZE:
+- small (KBs)
+
+SHARED OVER:
+- WebRTC messaging
+
+
+
+=====================================================================
+LAYER 15 — BUMPER SYSTEM (BUFFER MASKING)
+=====================================================================
+
+CONTENT:
+- short user-uploaded clips (~5–30s)
+
+STORED:
+- IndexedDB (persistent)
+
+USED FOR:
+- masking load times
+- monetization (token bidding)
+
+HIGH PRIORITY:
+- always preloaded
+
+
+
+=====================================================================
+LAYER 16 — NETWORK / UX FEEDBACK LOOP
+=====================================================================
+
+FLOW:
+
+User watches content
+   ↓
+Data exchanged via WebRTC
+   ↓
+Receipts generated
+   ↓
+Trust updated
+   ↓
+Tokens earned
+   ↓
+Votes placed
+   ↓
+Playlist reordered
+   ↓
+Seeding adjusted
+   ↓
+Swarm improves
+   ↓
+Better playback experience
+   ↓
+More engagement
+   ↓
+Cycle repeats
+
+
+
+=====================================================================
+LAYER 17 — OPTIONAL EXTENSIONS
+=====================================================================
+
+- Node.js persistent seeders
+- custom WSS tracker
+- encrypted peer messaging
+- token ↔ crypto bridge
+- advanced fraud detection
+- reputation markets
+
+
+
+=====================================================================
+FINAL SYSTEM SUMMARY
+=====================================================================
+
+DATA FLOW:
+
+INGEST → STORE → SHARE → RANK → PLAY → VERIFY → REWARD → REORDER → RESEED
+
+CORE BALANCE:
+
+- User Intent (votes, uploads)
+- Network Reality (bandwidth, swarm health)
+- System Intelligence (graph, auto-playlist)
+
+RESULT:
+
+A self-organizing, decentralized media system where:
+- content spreads if useful
+- dies if ignored
+- and improves as more users participate
+=====================================================================
