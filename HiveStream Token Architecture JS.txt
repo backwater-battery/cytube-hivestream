@@ -1,0 +1,566 @@
+/*
+===========================================================
+HIVESTREAM — FULL ARCHITECTURE (CODE BLUEPRINT)
+===========================================================
+
+This file represents the ENTIRE system:
+
+L1  Media Transport (WebTorrent)
+L2  Peer Messaging (WebRTC DataChannel)
+L3  Identity (WebCrypto keys)
+L4  Receipts (Proof of bandwidth)
+L5  Trust Engine (reputation)
+L6  Token Economy (lightweight incentives)
+L7  Playlist Engine (user-facing control)
+L8  Smart Seeding Manager (bandwidth allocation)
+L9  Bumper System (buffer masking)
+L10 Storage (IndexedDB persistence)
+L11 Trust Sharing (cross-peer consensus)
+
+===========================================================
+IMPORTANT DESIGN RULES
+===========================================================
+
+1. Media is heavy → handled by WebTorrent
+2. Metadata is light → handled by WebRTC messages
+3. Everything important is SIGNED
+4. Nothing critical depends on a central server
+5. Tokens influence ORDER, not playback availability
+6. Network readiness ALWAYS overrides demand
+
+===========================================================
+*/
+
+
+/*
+===========================================================
+LAYER 3 — IDENTITY (WebCrypto)
+===========================================================
+
+Each peer has:
+- persistent keypair
+- peerId derived from public key
+
+This is the ROOT of trust + tokens.
+*/
+
+class IdentityManager {
+    constructor() {
+        this.keypair = null;
+        this.peerId = null;
+    }
+
+    async init() {
+        // Try loading from IndexedDB first
+        this.keypair = await this.loadKeys();
+
+        if (!this.keypair) {
+            // First-time user → generate identity
+            this.keypair = await crypto.subtle.generateKey(
+                {
+                    name: "ECDSA",
+                    namedCurve: "P-256"
+                },
+                true,
+                ["sign", "verify"]
+            );
+
+            await this.saveKeys(this.keypair);
+        }
+
+        this.peerId = await this.derivePeerId(this.keypair.publicKey);
+    }
+
+    async derivePeerId(publicKey) {
+        const raw = await crypto.subtle.exportKey("raw", publicKey);
+        const hash = await crypto.subtle.digest("SHA-256", raw);
+
+        return btoa(String.fromCharCode(...new Uint8Array(hash))).slice(0, 16);
+    }
+
+    async sign(data) {
+        const encoded = new TextEncoder().encode(JSON.stringify(data));
+
+        return await crypto.subtle.sign(
+            { name: "ECDSA", hash: "SHA-256" },
+            this.keypair.privateKey,
+            encoded
+        );
+    }
+
+    async verify(data, signature, publicKey) {
+        const encoded = new TextEncoder().encode(JSON.stringify(data));
+
+        return await crypto.subtle.verify(
+            { name: "ECDSA", hash: "SHA-256" },
+            publicKey,
+            signature,
+            encoded
+        );
+    }
+
+    // Placeholder (hook into IndexedDB)
+    async saveKeys() {}
+    async loadKeys() {}
+}
+
+
+/*
+===========================================================
+LAYER 2 — PEER MESSAGING (WebRTC DataChannel)
+===========================================================
+
+Handles:
+- receipts
+- votes
+- trust summaries
+- staking signals
+
+IMPORTANT:
+Messages are small, signed, and frequent but lightweight.
+*/
+
+class PeerMessaging {
+    constructor(identity) {
+        this.identity = identity;
+        this.peers = new Map(); // peerId → dataChannel
+    }
+
+    send(peerId, message) {
+        const channel = this.peers.get(peerId);
+        if (!channel) return;
+
+        channel.send(JSON.stringify(message));
+    }
+
+    broadcast(message) {
+        for (let [peerId] of this.peers) {
+            this.send(peerId, message);
+        }
+    }
+
+    async signMessage(payload) {
+        const signature = await this.identity.sign(payload);
+
+        return {
+            payload,
+            signature,
+            from: this.identity.peerId
+        };
+    }
+}
+
+
+/*
+===========================================================
+LAYER 4 — RECEIPT SYSTEM
+===========================================================
+
+Proves bandwidth exchange occurred.
+
+IMPORTANT:
+- batched (NOT per chunk)
+- signed
+- verified by receiver
+*/
+
+class ReceiptEngine {
+    constructor(identity, messaging) {
+        this.identity = identity;
+        this.messaging = messaging;
+
+        this.batch = [];
+        this.lastFlush = Date.now();
+    }
+
+    recordTransfer(infoHash, bytes, chunkRange) {
+        this.batch.push({
+            infoHash,
+            bytes,
+            chunkRange,
+            timestamp: Date.now()
+        });
+
+        // Flush every ~2 seconds or large batch
+        if (Date.now() - this.lastFlush > 2000) {
+            this.flush();
+        }
+    }
+
+    async flush() {
+        if (this.batch.length === 0) return;
+
+        const payload = {
+            type: "receipt",
+            transfers: this.batch,
+            nonce: Math.random().toString(36)
+        };
+
+        const signed = await this.messaging.signMessage(payload);
+
+        this.messaging.broadcast(signed);
+
+        this.batch = [];
+        this.lastFlush = Date.now();
+    }
+}
+
+
+/*
+===========================================================
+LAYER 5 — TRUST ENGINE
+===========================================================
+
+Builds reputation from:
+- valid receipts
+- fraud detection
+- peer diversity
+
+Outputs:
+- trustScore (0–1)
+*/
+
+class TrustEngine {
+    constructor() {
+        this.profiles = {}; // peerId → trust profile
+    }
+
+    processReceipt(receipt, senderTrust) {
+        const peerId = receipt.from;
+
+        if (!this.profiles[peerId]) {
+            this.profiles[peerId] = this.createProfile();
+        }
+
+        const profile = this.profiles[peerId];
+
+        // Simple validation placeholder
+        if (!receipt.payload) {
+            profile.fraud++;
+        } else {
+            profile.valid++;
+            profile.bytes += receipt.payload.transfers.reduce(
+                (sum, t) => sum + t.bytes, 0
+            );
+        }
+
+        this.updateTrust(peerId);
+    }
+
+    updateTrust(peerId) {
+        const p = this.profiles[peerId];
+
+        const base =
+            (p.valid * 0.01) -
+            (p.fraud * 0.5);
+
+        p.trustScore = 1 / (1 + Math.exp(-base));
+    }
+
+    getTrust(peerId) {
+        return this.profiles[peerId]?.trustScore || 0.1;
+    }
+
+    createProfile() {
+        return {
+            valid: 0,
+            fraud: 0,
+            bytes: 0,
+            trustScore: 0.1
+        };
+    }
+}
+
+
+/*
+===========================================================
+LAYER 6 — TOKEN ECONOMY
+===========================================================
+
+Tokens:
+- rewarded for real uploads
+- weighted by trust
+- used ONLY for playlist influence
+
+DO NOT block playback.
+*/
+
+class TokenEngine {
+    constructor(trust) {
+        this.trust = trust;
+        this.balance = 0;
+    }
+
+    reward(peerId, bytes) {
+        const trust = this.trust.getTrust(peerId);
+
+        const reward =
+            (bytes / (1024 * 1024)) * // MB
+            trust;
+
+        this.balance += reward;
+    }
+
+    spend(amount) {
+        if (this.balance < amount) return false;
+
+        this.balance -= amount;
+        return true;
+    }
+}
+
+
+/*
+===========================================================
+LAYER 7 — PLAYLIST ENGINE
+===========================================================
+
+Controls:
+- ordering
+- voting
+- readiness-aware ranking
+
+NEVER blocks playback.
+*/
+
+class PlaylistEngine {
+    constructor(trust, tokens) {
+        this.trust = trust;
+        this.tokens = tokens;
+
+        this.items = [];
+        this.votes = {};
+    }
+
+    add(item) {
+        this.items.push(item);
+    }
+
+    vote(infoHash, peerId) {
+        const weight =
+            this.tokens.balance *
+            this.trust.getTrust(peerId);
+
+        if (!this.votes[infoHash]) this.votes[infoHash] = [];
+
+        this.votes[infoHash].push({
+            weight,
+            time: Date.now()
+        });
+    }
+
+    score(item, readiness) {
+        const votes = this.votes[item.infoHash] || [];
+
+        const demand = votes.reduce((s, v) => s + v.weight, 0);
+
+        return demand * readiness;
+    }
+}
+
+
+/*
+===========================================================
+LAYER 8 — SMART SEEDING MANAGER
+===========================================================
+
+Controls:
+- which torrents stay active
+- preloading upcoming items
+
+Goal:
+maximize playback smoothness.
+*/
+
+class SeedingManager {
+    constructor(base, playlist) {
+        this.base = base;
+        this.playlist = playlist;
+
+        this.MAX_ACTIVE = 5;
+    }
+
+    rebalance() {
+        const scored = this.base.activeTorrents.map(t => ({
+            torrent: t,
+            score: this.playlist.score(t, t.progress || 0)
+        }));
+
+        scored.sort((a, b) => b.score - a.score);
+
+        // Keep top N
+        const keep = scored.slice(0, this.MAX_ACTIVE);
+
+        // Drop rest
+        scored.slice(this.MAX_ACTIVE).forEach(x => {
+            x.torrent.destroy();
+        });
+
+        this.base.activeTorrents = keep.map(x => x.torrent);
+    }
+}
+
+
+/*
+===========================================================
+LAYER 9 — BUMPER SYSTEM
+===========================================================
+
+Short MP4 clips:
+- play instantly
+- stored locally
+- mask buffering
+
+ZERO network cost at playback time.
+*/
+
+class BumperEngine {
+    constructor() {
+        this.cache = {}; // id → Blob
+    }
+
+    add(id, blob) {
+        this.cache[id] = blob;
+    }
+
+    playRandom() {
+        const keys = Object.keys(this.cache);
+        if (!keys.length) return;
+
+        const blob = this.cache[
+            keys[Math.floor(Math.random() * keys.length)]
+        ];
+
+        const video = document.createElement("video");
+
+        video.src = URL.createObjectURL(blob);
+        video.autoplay = true;
+
+        document.body.innerHTML = "";
+        document.body.appendChild(video);
+    }
+}
+
+
+/*
+===========================================================
+LAYER 10 — STORAGE (IndexedDB)
+===========================================================
+
+Stores:
+- identity
+- trust profiles
+- tokens
+- metadata
+
+Does NOT store:
+- video chunks
+- raw receipts
+*/
+
+class StorageEngine {
+    constructor() {}
+
+    async save(key, value) {
+        // Implement IndexedDB
+    }
+
+    async load(key) {}
+}
+
+
+/*
+===========================================================
+LAYER 11 — TRUST SHARING (GOSSIP MODEL)
+===========================================================
+
+Peers exchange trust summaries.
+
+Prevents:
+- isolated knowledge
+- slow reputation spread
+*/
+
+class TrustSharing {
+    constructor(trust, messaging) {
+        this.trust = trust;
+        this.messaging = messaging;
+    }
+
+    broadcastSummary() {
+        const summary = {
+            type: "trust_summary",
+            data: this.trust.profiles
+        };
+
+        this.messaging.broadcast(summary);
+    }
+
+    mergeSummary(summary, senderTrust) {
+        for (let peerId in summary.data) {
+            const incoming = summary.data[peerId];
+
+            const local = this.trust.profiles[peerId];
+
+            if (!local) {
+                this.trust.profiles[peerId] = incoming;
+                continue;
+            }
+
+            // Weighted merge
+            local.trustScore =
+                (local.trustScore * 0.7) +
+                (incoming.trustScore * 0.3 * senderTrust);
+        }
+    }
+}
+
+
+/*
+===========================================================
+SYSTEM ORCHESTRATOR
+===========================================================
+
+Connects all layers into one system.
+*/
+
+class HiveSystem {
+    async init() {
+        this.identity = new IdentityManager();
+        await this.identity.init();
+
+        this.messaging = new PeerMessaging(this.identity);
+
+        this.trust = new TrustEngine();
+        this.tokens = new TokenEngine(this.trust);
+
+        this.receipts = new ReceiptEngine(
+            this.identity,
+            this.messaging
+        );
+
+        this.playlist = new PlaylistEngine(
+            this.trust,
+            this.tokens
+        );
+
+        this.seeding = new SeedingManager(
+            this,
+            this.playlist
+        );
+
+        this.bumpers = new BumperEngine();
+
+        this.trustSharing = new TrustSharing(
+            this.trust,
+            this.messaging
+        );
+    }
+
+    tick() {
+        // Runs every few seconds
+
+        this.seeding.rebalance();
+        this.trustSharing.broadcastSummary();
+    }
+}
